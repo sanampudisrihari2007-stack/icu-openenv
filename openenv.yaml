@@ -1,0 +1,108 @@
+name: icu-treatment-optimizer
+version: 1.0.0
+description: >
+  RL environment for ICU patient treatment optimization.
+  An AI agent learns to recommend treatment sequences for critically ill
+  patients to maximize survival probability and normalize vital signs.
+domain: healthcare
+author: your-team-name
+
+api:
+  reset_endpoint: /reset
+  step_endpoint: /step
+  state_endpoint: /state
+  tasks_endpoint: /tasks
+  grade_endpoint: /grade
+
+tasks:
+  - id: 1
+    name: Blood Pressure Stabilisation
+    difficulty: easy
+    max_steps: 10
+    description: >
+      Bring systolic blood pressure into the 90–120 mmHg range within 10 steps.
+    target_vital: systolic_bp
+    target_range: [90, 120]
+
+  - id: 2
+    name: Multi-Vital Balancing
+    difficulty: medium
+    max_steps: 20
+    description: >
+      Normalise heart rate, SpO2, and blood glucose simultaneously within 20 steps.
+    target_vitals:
+      - heart_rate
+      - spo2
+      - blood_glucose
+
+  - id: 3
+    name: Full ICU / Sepsis Management
+    difficulty: hard
+    max_steps: 24
+    description: >
+      Manage a critically ill sepsis patient over a 24-step episode,
+      maximising survival probability and normalising all organ systems.
+
+observation_space:
+  - name: heart_rate
+    type: float
+    unit: bpm
+    normal_range: [60, 100]
+  - name: systolic_bp
+    type: float
+    unit: mmHg
+    normal_range: [90, 120]
+  - name: diastolic_bp
+    type: float
+    unit: mmHg
+    normal_range: [60, 80]
+  - name: spo2
+    type: float
+    unit: percent
+    normal_range: [95, 100]
+  - name: temperature
+    type: float
+    unit: celsius
+    normal_range: [36.5, 37.5]
+  - name: blood_glucose
+    type: float
+    unit: mg/dL
+    normal_range: [70, 140]
+  - name: respiratory_rate
+    type: float
+    unit: breaths/min
+    normal_range: [12, 20]
+  - name: creatinine
+    type: float
+    unit: mg/dL
+    normal_range: [0.6, 1.2]
+
+action_space:
+  - increase_vasopressor
+  - decrease_vasopressor
+  - give_antibiotics
+  - increase_insulin
+  - decrease_insulin
+  - give_iv_fluids
+  - increase_oxygen
+  - decrease_oxygen
+  - increase_peep
+  - decrease_peep
+  - order_labs
+  - call_specialist
+  - do_nothing
+
+reward:
+  range: [0.0, 1.0]
+  description: >
+    Composite of survival improvement, vitals normalisation, and treatment safety.
+  partial_progress: true
+
+environment:
+  variables:
+    - name: API_BASE_URL
+      description: LLM API endpoint
+    - name: MODEL_NAME
+      description: Model identifier for inference
+    - name: HF_TOKEN
+      description: Hugging Face / API key
