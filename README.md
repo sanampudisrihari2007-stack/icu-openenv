@@ -1,3 +1,12 @@
+---
+title: ICU Treatment Optimizer
+emoji: 🏥
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+
 #  ICU Treatment Optimizer — OpenEnv
 
 An RL environment where an AI agent learns to recommend treatment actions
