@@ -20,8 +20,6 @@ MODEL_NAME   = os.environ.get("MODEL_NAME",   "llama-3.1-8b-instant")
 HF_TOKEN     = os.environ.get("HF_TOKEN",     "")
 ENV_URL      = os.environ.get("ENV_URL",      "http://localhost:7860")
 
-client = OpenAI(api_key=HF_TOKEN, base_url=API_BASE_URL)
-
 TASKS = [1, 2, 3]
 
 SYSTEM_PROMPT = """You are an expert ICU physician AI.
@@ -75,6 +73,7 @@ Respond with ONLY a JSON object:
 
 
 def choose_action(state: dict) -> str:
+    client = OpenAI(api_key=HF_TOKEN, base_url=API_BASE_URL)
     vitals = state.get("vitals", {})
     prompt = f"""
 Patient vitals:
