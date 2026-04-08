@@ -9,11 +9,11 @@ import requests
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1")
 MODEL_NAME   = os.environ.get("MODEL_NAME",   "llama-3.1-8b-instant")
-# SECURE CHANGE: Token is now retrieved from environment variables only
-token = os.getenv("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")
-ENV_URL      = os.environ.get("ENV_URL",      "https://har12334-icu-treatment-optimizer.hf.space")
+HF_TOKEN     = os.environ.get("HF_TOKEN",     "")
+ENV_URL      = os.environ.get("ENV_URL",      "http://localhost:7860")
 
 TASKS = [1, 2, 3]
+
 
 def rule_based_action(state: dict, task_id: int) -> str:
     vitals  = state.get("vitals", {})
@@ -73,9 +73,12 @@ def rule_based_action(state: dict, task_id: int) -> str:
 
 
 def run_episode(task_id: int) -> dict:
-    task_name = f"task{task_id}"
-
-    print(f"[START] task={task_name}", flush=True)
+    # [START]
+    print(json.dumps({
+        "event":     "START",
+        "task_id":   task_id,
+        "timestamp": time.time(),
+    }), flush=True)
 
     try:
         state = requests.post(
@@ -84,12 +87,11 @@ def run_episode(task_id: int) -> dict:
             timeout=60
         ).json()
     except Exception as e:
-        print(f"[END] task={task_name} score=0.0 steps=0", flush=True)
+        print(json.dumps({"event": "END", "task_id": task_id, "total_steps": 0, "total_reward": 0.0, "final_score": 0.0, "details": {}}), flush=True)
         return {"task_id": task_id, "score": 0.0, "steps": 0}
 
     episode_log = []
     total_reward = 0.0
-    step_num = 0
 
     while not state.get("done", False):
         action = rule_based_action(state, task_id)
@@ -111,10 +113,9 @@ def run_episode(task_id: int) -> dict:
         reward       = result.get("reward", 0.0)
         done         = result.get("done", False)
         total_reward += reward
-        step_num     = new_state.get("step", step_num + 1)
 
         log_entry = {
-            "step":                 step_num,
+            "step":                 new_state["step"],
             "action":               action,
             "vitals":               new_state["vitals"],
             "survival_probability": new_state["survival_probability"],
@@ -123,13 +124,16 @@ def run_episode(task_id: int) -> dict:
         }
         episode_log.append(log_entry)
 
-        print(
-            f"[STEP] task={task_name} step={step_num} "
-            f"action={action} reward={round(reward, 4)} "
-            f"survival_prob={round(new_state['survival_probability'], 4)} "
-            f"done={done}",
-            flush=True
-        )
+        # [STEP]
+        print(json.dumps({
+            "event":                "STEP",
+            "task_id":              task_id,
+            "step":                 new_state["step"],
+            "action":               action,
+            "reward":               round(reward, 4),
+            "survival_probability": round(new_state["survival_probability"], 4),
+            "done":                 done,
+        }), flush=True)
 
         state = new_state
         if done:
@@ -146,10 +150,15 @@ def run_episode(task_id: int) -> dict:
 
     final_score = grade_result.get("score", 0.0)
 
-    print(
-        f"[END] task={task_name} score={round(final_score, 4)} steps={len(episode_log)}",
-        flush=True
-    )
+    # [END]
+    print(json.dumps({
+        "event":        "END",
+        "task_id":      task_id,
+        "total_steps":  len(episode_log),
+        "total_reward": round(total_reward, 4),
+        "final_score":  round(final_score, 4),
+        "details":      grade_result.get("details", {}),
+    }), flush=True)
 
     return {"task_id": task_id, "score": final_score, "steps": len(episode_log)}
 
