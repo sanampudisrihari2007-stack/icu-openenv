@@ -10,7 +10,6 @@ import requests
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1")
 MODEL_NAME   = os.environ.get("MODEL_NAME",   "llama-3.1-8b-instant")
 # SECURE CHANGE: Token is now retrieved from environment variables only
-import os
 token = os.getenv("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")
 ENV_URL      = os.environ.get("ENV_URL",      "https://har12334-icu-treatment-optimizer.hf.space")
 
