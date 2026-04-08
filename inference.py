@@ -9,7 +9,7 @@ import requests
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1")
 MODEL_NAME   = os.environ.get("MODEL_NAME",   "llama-3.1-8b-instant")
-HF_TOKEN     = os.environ.get("HF_TOKEN",     "")
+HF_TOKEN     = os.environ.get("HF_TOKEN",  "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")
 ENV_URL      = os.environ.get("ENV_URL",      "https://har12334-icu-treatment-optimizer.hf.space")
 
 TASKS = [1, 2, 3]
