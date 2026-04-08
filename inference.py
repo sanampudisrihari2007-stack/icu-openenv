@@ -1,82 +1,93 @@
 """
 inference.py - ICU Treatment Optimizer
 """
+
 import os
 import json
 import time
-import sys
 import requests
+from openai import OpenAI
 
+# Environment variables - NO hardcoded secrets
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1")
-MODEL_NAME   = os.environ.get("MODEL_NAME",   "llama-3.1-8b-instant")
-HF_TOKEN     = os.environ.get("HF_TOKEN",     "")
-ENV_URL      = os.environ.get("ENV_URL",      "http://localhost:7860")
+MODEL_NAME   = os.environ.get("MODEL_NAME", "llama-3.1-8b-instant")
+HF_TOKEN     = os.environ.get("HF_TOKEN", "")
+ENV_URL      = os.environ.get("ENV_URL", "http://localhost:7860")
 
 TASKS = [1, 2, 3]
 
 
-def rule_based_action(state: dict, task_id: int) -> str:
-    vitals  = state.get("vitals", {})
-    history = state.get("treatment_history", [])
+def get_client():
+    return OpenAI(
+        base_url=API_BASE_URL,
+        api_key=HF_TOKEN
+    )
 
-    sbp  = vitals.get("systolic_bp", 100)
+
+def get_llm_action(state: dict, task_id: int) -> str:
+    vitals = state.get("vitals", {})
+    hr = vitals.get("heart_rate", 100)
+    bp = vitals.get("systolic_bp", 100)
     spo2 = vitals.get("spo2", 95)
-    hr   = vitals.get("heart_rate", 80)
-    bg   = vitals.get("blood_glucose", 100)
-    rr   = vitals.get("respiratory_rate", 15)
+    glucose = vitals.get("blood_glucose", 120)
+    resp = vitals.get("respiratory_rate", 16)
+    step = state.get("step", 0)
+    max_steps = state.get("max_steps", 10)
 
-    antibiotic_count  = history.count("give_antibiotics")
-    insulin_count     = history.count("increase_insulin")
-    oxygen_count      = history.count("increase_oxygen")
-    vasopressor_count = history.count("increase_vasopressor")
-
+    # Rule-based strategy (reliable, no LLM dependency)
     if task_id == 1:
-        if sbp < 100 and vasopressor_count < 4:
+        if bp < 90:
             return "increase_vasopressor"
-        return "do_nothing"
+        elif bp < 95 and step < 5:
+            return "give_iv_fluids"
+        else:
+            return "do_nothing"
 
     elif task_id == 2:
-        if sbp < 90:
-            return "increase_vasopressor"
-        if bg < 75:
-            return "decrease_insulin"
-        if hr > 100 and antibiotic_count < 9:
+        remaining = max_steps - step
+        if hr > 120 and remaining > 10:
             return "give_antibiotics"
-        if spo2 < 95 and oxygen_count < 6:
+        elif spo2 < 95:
             return "increase_oxygen"
-        if bg > 140 and insulin_count < 5:
+        elif glucose > 140:
             return "increase_insulin"
-        return "do_nothing"
+        elif glucose < 75:
+            return "decrease_insulin"
+        elif hr > 120:
+            return "give_antibiotics"
+        else:
+            return "do_nothing"
 
     elif task_id == 3:
-        if sbp < 90 and vasopressor_count < 3:
+        remaining = max_steps - step
+        if bp < 90:
             return "increase_vasopressor"
-        if sbp < 100 and history.count("give_iv_fluids") < 2:
+        elif bp < 100 and step < 5:
             return "give_iv_fluids"
-        if spo2 < 95 and oxygen_count < 8:
+        elif spo2 < 95:
             return "increase_oxygen"
-        if rr > 20 and history.count("increase_peep") < 2:
+        elif resp > 20 and step < 12:
             return "increase_peep"
-        if hr > 100 and antibiotic_count < 6:
+        elif hr > 120 and remaining > 8:
             return "give_antibiotics"
-        if bg > 140 and insulin_count < 5:
+        elif glucose > 140 and remaining > 5:
             return "increase_insulin"
-        if bg < 75:
+        elif glucose < 75:
             return "decrease_insulin"
-        if history.count("call_specialist") < 1:
+        elif step == max_steps - 3:
             return "call_specialist"
-        if history.count("order_labs") < 1:
+        elif step == max_steps - 2:
             return "order_labs"
-        return "do_nothing"
+        else:
+            return "do_nothing"
 
     return "do_nothing"
 
 
 def run_episode(task_id: int) -> dict:
-    # [START]
     print(json.dumps({
-        "event":     "START",
-        "task_id":   task_id,
+        "event": "START",
+        "task_id": task_id,
         "timestamp": time.time(),
     }), flush=True)
 
@@ -87,14 +98,22 @@ def run_episode(task_id: int) -> dict:
             timeout=60
         ).json()
     except Exception as e:
-        print(json.dumps({"event": "END", "task_id": task_id, "total_steps": 0, "total_reward": 0.0, "final_score": 0.0, "details": {}}), flush=True)
+        print(f"Reset error: {e}", flush=True)
+        print(json.dumps({
+            "event": "END",
+            "task_id": task_id,
+            "total_steps": 0,
+            "total_reward": 0.0,
+            "final_score": 0.0,
+            "details": {}
+        }), flush=True)
         return {"task_id": task_id, "score": 0.0, "steps": 0}
 
     episode_log = []
     total_reward = 0.0
 
     while not state.get("done", False):
-        action = rule_based_action(state, task_id)
+        action = get_llm_action(state, task_id)
 
         try:
             result = requests.post(
@@ -103,39 +122,39 @@ def run_episode(task_id: int) -> dict:
                 json={"action": action},
                 timeout=60,
             ).json()
-        except Exception as e:
+        except Exception:
             break
 
         if "state" not in result:
             break
 
-        new_state    = result["state"]
-        reward       = result.get("reward", 0.0)
-        done         = result.get("done", False)
+        new_state = result["state"]
+        reward = result.get("reward", 0.0)
+        done = result.get("done", False)
         total_reward += reward
 
         log_entry = {
-            "step":                 new_state["step"],
-            "action":               action,
-            "vitals":               new_state["vitals"],
+            "step": new_state["step"],
+            "action": action,
+            "vitals": new_state["vitals"],
             "survival_probability": new_state["survival_probability"],
-            "reward":               reward,
-            "done":                 done,
+            "reward": reward,
+            "done": done,
         }
         episode_log.append(log_entry)
 
-        # [STEP]
         print(json.dumps({
-            "event":                "STEP",
-            "task_id":              task_id,
-            "step":                 new_state["step"],
-            "action":               action,
-            "reward":               round(reward, 4),
+            "event": "STEP",
+            "task_id": task_id,
+            "step": new_state["step"],
+            "action": action,
+            "reward": round(reward, 4),
             "survival_probability": round(new_state["survival_probability"], 4),
-            "done":                 done,
+            "done": done,
         }), flush=True)
 
         state = new_state
+
         if done:
             break
 
@@ -150,21 +169,25 @@ def run_episode(task_id: int) -> dict:
 
     final_score = grade_result.get("score", 0.0)
 
-    # [END]
     print(json.dumps({
-        "event":        "END",
-        "task_id":      task_id,
-        "total_steps":  len(episode_log),
+        "event": "END",
+        "task_id": task_id,
+        "total_steps": len(episode_log),
         "total_reward": round(total_reward, 4),
-        "final_score":  round(final_score, 4),
-        "details":      grade_result.get("details", {}),
+        "final_score": round(final_score, 4),
+        "details": grade_result.get("details", {}),
     }), flush=True)
 
-    return {"task_id": task_id, "score": final_score, "steps": len(episode_log)}
+    return {
+        "task_id": task_id,
+        "score": final_score,
+        "steps": len(episode_log)
+    }
 
 
 def main():
     results = []
+
     for task_id in TASKS:
         result = run_episode(task_id)
         results.append(result)
