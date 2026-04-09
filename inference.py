@@ -6,7 +6,6 @@ import os
 import json
 import time
 import requests
-from openai import OpenAI
 
 # Environment variables - NO hardcoded secrets
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1")
@@ -17,24 +16,16 @@ ENV_URL      = os.environ.get("ENV_URL", "http://localhost:7860")
 TASKS = [1, 2, 3]
 
 
-def get_client():
-    return OpenAI(
-        base_url=API_BASE_URL,
-        api_key=HF_TOKEN
-    )
-
-
-def get_llm_action(state: dict, task_id: int) -> str:
+def get_action(state: dict, task_id: int) -> str:
     vitals = state.get("vitals", {})
-    hr = vitals.get("heart_rate", 100)
-    bp = vitals.get("systolic_bp", 100)
-    spo2 = vitals.get("spo2", 95)
+    hr     = vitals.get("heart_rate", 100)
+    bp     = vitals.get("systolic_bp", 100)
+    spo2   = vitals.get("spo2", 95)
     glucose = vitals.get("blood_glucose", 120)
-    resp = vitals.get("respiratory_rate", 16)
-    step = state.get("step", 0)
+    resp   = vitals.get("respiratory_rate", 16)
+    step   = state.get("step", 0)
     max_steps = state.get("max_steps", 10)
 
-    # Rule-based strategy (reliable, no LLM dependency)
     if task_id == 1:
         if bp < 90:
             return "increase_vasopressor"
@@ -85,11 +76,8 @@ def get_llm_action(state: dict, task_id: int) -> str:
 
 
 def run_episode(task_id: int) -> dict:
-    print(json.dumps({
-        "event": "START",
-        "task_id": task_id,
-        "timestamp": time.time(),
-    }), flush=True)
+    # [START] block
+    print(f"[START] task={task_id} timestamp={time.time()}", flush=True)
 
     try:
         state = requests.post(
@@ -98,22 +86,14 @@ def run_episode(task_id: int) -> dict:
             timeout=60
         ).json()
     except Exception as e:
-        print(f"Reset error: {e}", flush=True)
-        print(json.dumps({
-            "event": "END",
-            "task_id": task_id,
-            "total_steps": 0,
-            "total_reward": 0.0,
-            "final_score": 0.0,
-            "details": {}
-        }), flush=True)
+        print(f"[END] task={task_id} score=0.0 steps=0", flush=True)
         return {"task_id": task_id, "score": 0.0, "steps": 0}
 
     episode_log = []
     total_reward = 0.0
 
     while not state.get("done", False):
-        action = get_llm_action(state, task_id)
+        action = get_action(state, task_id)
 
         try:
             result = requests.post(
@@ -129,8 +109,8 @@ def run_episode(task_id: int) -> dict:
             break
 
         new_state = result["state"]
-        reward = result.get("reward", 0.0)
-        done = result.get("done", False)
+        reward    = result.get("reward", 0.0)
+        done      = result.get("done", False)
         total_reward += reward
 
         log_entry = {
@@ -143,18 +123,15 @@ def run_episode(task_id: int) -> dict:
         }
         episode_log.append(log_entry)
 
-        print(json.dumps({
-            "event": "STEP",
-            "task_id": task_id,
-            "step": new_state["step"],
-            "action": action,
-            "reward": round(reward, 4),
-            "survival_probability": round(new_state["survival_probability"], 4),
-            "done": done,
-        }), flush=True)
+        # [STEP] block
+        print(
+            f"[STEP] task={task_id} step={new_state['step']} "
+            f"action={action} reward={round(reward, 4)} "
+            f"survival={round(new_state['survival_probability'], 4)} done={done}",
+            flush=True
+        )
 
         state = new_state
-
         if done:
             break
 
@@ -169,14 +146,11 @@ def run_episode(task_id: int) -> dict:
 
     final_score = grade_result.get("score", 0.0)
 
-    print(json.dumps({
-        "event": "END",
-        "task_id": task_id,
-        "total_steps": len(episode_log),
-        "total_reward": round(total_reward, 4),
-        "final_score": round(final_score, 4),
-        "details": grade_result.get("details", {}),
-    }), flush=True)
+    # [END] block
+    print(
+        f"[END] task={task_id} score={round(final_score, 4)} steps={len(episode_log)}",
+        flush=True
+    )
 
     return {
         "task_id": task_id,
@@ -187,7 +161,6 @@ def run_episode(task_id: int) -> dict:
 
 def main():
     results = []
-
     for task_id in TASKS:
         result = run_episode(task_id)
         results.append(result)
