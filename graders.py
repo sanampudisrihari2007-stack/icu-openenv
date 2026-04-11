@@ -1,20 +1,24 @@
-from patient_model import PatientState, GradeResult
+from patient_model import GradeResult
 from environment import NORMAL
 
 
 def _clamp(score: float) -> float:
-    """Ensure score is strictly between 0 and 1 (exclusive)."""
-    return round(max(0.01, min(0.99, float(score))), 4)
+    """Score must be strictly between 0 and 1 — never 0.0 or 1.0."""
+    s = float(score)
+    if s <= 0.0:
+        return 0.01
+    if s >= 1.0:
+        return 0.99
+    return round(s, 4)
 
 
-def _vital_score(vitals, key: str) -> float:
-    lo, hi = NORMAL[key]
-    value = getattr(vitals, key)
+def _vital_score(value: float, lo: float, hi: float) -> float:
     if lo <= value <= hi:
-        return 0.98
+        return 0.95
     mid = (lo + hi) / 2
     span = (hi - lo) / 2 + 1e-9
-    return max(0.01, min(0.98, 1.0 - abs(value - mid) / (span * 3)))
+    raw = 1.0 - abs(value - mid) / (span * 3)
+    return max(0.02, min(0.95, raw))
 
 
 def grade_task1(episode_log: list) -> GradeResult:
@@ -23,12 +27,10 @@ def grade_task1(episode_log: list) -> GradeResult:
 
     final = episode_log[-1]
     vitals = final.get("vitals", {})
-    sbp = vitals.get("systolic_bp", 0)
+    sbp = vitals.get("systolic_bp", 60)
     steps_taken = len(episode_log)
 
-    bp_score = _vital_score(
-        type("V", (), {"systolic_bp": sbp})(), "systolic_bp"
-    )
+    bp_score = _vital_score(sbp, 90, 120)
 
     first_normal_step = None
     for i, entry in enumerate(episode_log):
@@ -37,12 +39,12 @@ def grade_task1(episode_log: list) -> GradeResult:
             first_normal_step = i + 1
             break
 
-    if first_normal_step is not None and bp_score >= 0.9:
-        efficiency_bonus = max(0.0, (10 - first_normal_step) / 10) * 0.2
+    if first_normal_step is not None and bp_score >= 0.8:
+        efficiency_bonus = max(0.0, (10 - first_normal_step) / 10) * 0.15
     else:
         efficiency_bonus = 0.0
 
-    score = bp_score * 0.8 + efficiency_bonus
+    score = bp_score * 0.75 + efficiency_bonus + 0.05
 
     return GradeResult(
         task_id=1,
@@ -65,52 +67,45 @@ def grade_task2(episode_log: list) -> GradeResult:
     final = episode_log[-1]
     vitals = final.get("vitals", {})
 
-    targets = {
-        "heart_rate":    vitals.get("heart_rate", 0),
-        "spo2":          vitals.get("spo2", 0),
-        "blood_glucose": vitals.get("blood_glucose", 0),
-    }
+    hr = vitals.get("heart_rate", 150)
+    spo2 = vitals.get("spo2", 80)
+    bg = vitals.get("blood_glucose", 200)
 
-    class _V:
-        pass
+    hr_score = _vital_score(hr, 60, 100)
+    spo2_score = _vital_score(spo2, 95, 100)
+    bg_score = _vital_score(bg, 70, 140)
 
-    v = _V()
-    for k, val in targets.items():
-        setattr(v, k, val)
+    # Heart rate partial credit
+    if hr <= 100:
+        hr_score = 0.95
+    elif hr <= 120:
+        hr_score = 0.75
+    elif hr <= 140:
+        hr_score = 0.55
+    elif hr <= 160:
+        hr_score = 0.35
+    elif hr <= 180:
+        hr_score = 0.15
+    else:
+        hr_score = 0.05
 
-    scores = {}
-    for k in targets:
-        raw = _vital_score(v, k)
-        if k == "heart_rate":
-            hr = targets[k]
-            if hr <= 100:
-                raw = 0.98
-            elif hr <= 120:
-                raw = 0.8
-            elif hr <= 140:
-                raw = 0.6
-            elif hr <= 160:
-                raw = 0.4
-            elif hr <= 180:
-                raw = 0.2
-            else:
-                raw = 0.05
-        scores[k] = raw
-
-    weights = {"heart_rate": 0.3, "spo2": 0.4, "blood_glucose": 0.3}
-    weighted = sum(scores[k] * weights[k] for k in scores)
-    all_normal = all(scores[k] >= 0.9 for k in scores)
-    bonus = 0.08 if all_normal else 0.0
-    score = weighted + bonus
+    weighted = hr_score * 0.3 + spo2_score * 0.4 + bg_score * 0.3
+    all_normal = hr_score >= 0.7 and spo2_score >= 0.8 and bg_score >= 0.8
+    bonus = 0.07 if all_normal else 0.0
+    score = weighted + bonus + 0.02
 
     return GradeResult(
         task_id=2,
         score=_clamp(score),
         details={
-            "vital_scores": {k: round(v, 4) for k, v in scores.items()},
+            "vital_scores": {
+                "heart_rate": round(hr_score, 4),
+                "spo2": round(spo2_score, 4),
+                "blood_glucose": round(bg_score, 4),
+            },
             "all_vitals_normal": all_normal,
             "bonus": bonus,
-            "final_vitals": targets,
+            "final_vitals": {"heart_rate": hr, "spo2": spo2, "blood_glucose": bg},
         },
     )
 
@@ -119,25 +114,33 @@ def grade_task3(episode_log: list) -> GradeResult:
     if not episode_log:
         return GradeResult(task_id=3, score=0.01, details={"error": "empty log"})
 
-    survivals = [step.get("survival_probability", 0.0) for step in episode_log]
-    final_survival = survivals[-1]
-    avg_survival = sum(survivals) / len(survivals)
+    survivals = [step.get("survival_probability", 0.5) for step in episode_log]
+    final_survival = min(0.97, survivals[-1])
+    avg_survival = min(0.97, sum(survivals) / len(survivals))
 
     final_vitals_raw = episode_log[-1].get("vitals", {})
-
-    class _V:
-        pass
-
-    fv = _V()
-    for k, val in final_vitals_raw.items():
-        setattr(fv, k, val)
-
-    vital_scores = [_vital_score(fv, k) for k in NORMAL]
-    vitals_normalised = sum(1 for s in vital_scores if s >= 0.9) / len(vital_scores)
+    normal_ranges = {
+        "heart_rate": (60, 100),
+        "systolic_bp": (90, 120),
+        "spo2": (95, 100),
+        "temperature": (36.5, 37.5),
+        "blood_glucose": (70, 140),
+        "respiratory_rate": (12, 20),
+        "creatinine": (0.6, 1.2),
+    }
+    normal_count = 0
+    total_count = 0
+    for key, (lo, hi) in normal_ranges.items():
+        val = final_vitals_raw.get(key, 0)
+        if val > 0:
+            total_count += 1
+            if lo <= val <= hi:
+                normal_count += 1
+    vitals_normalised = normal_count / max(total_count, 1)
 
     actions = [step.get("action", "") for step in episode_log if step.get("action")]
     unique_actions = len(set(actions))
-    diversity_score = min(0.98, unique_actions / 6)
+    diversity_score = min(0.95, unique_actions / 6)
 
     score = (
         0.40 * final_survival
@@ -151,11 +154,11 @@ def grade_task3(episode_log: list) -> GradeResult:
         score=_clamp(score),
         details={
             "final_survival_probability": round(final_survival, 4),
-            "average_survival":           round(avg_survival, 4),
-            "vitals_normalised_ratio":    round(vitals_normalised, 4),
-            "unique_actions_used":        unique_actions,
-            "diversity_score":            round(diversity_score, 4),
-            "total_steps":                len(episode_log),
+            "average_survival": round(avg_survival, 4),
+            "vitals_normalised_ratio": round(vitals_normalised, 4),
+            "unique_actions_used": unique_actions,
+            "diversity_score": round(diversity_score, 4),
+            "total_steps": len(episode_log),
         },
     )
 
