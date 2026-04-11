@@ -104,7 +104,7 @@ def grade_task3(episode_log: list) -> GradeResult:
     if not episode_log:
         return GradeResult(task_id=3, score=0.05, details={"error": "empty log"})
 
-    survivals      = [_safe(s.get("survival_probability", 0.5)) for s in episode_log]
+    survivals      = [_safe(float(s.get("survival_probability", 0.5)) or 0.05) for s in episode_log]
     final_survival = min(0.95, survivals[-1])
     avg_survival   = min(0.95, sum(survivals) / len(survivals))
 
