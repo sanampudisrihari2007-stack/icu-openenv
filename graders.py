@@ -1,22 +1,30 @@
 from patient_model import GradeResult
-from environment import NORMAL
 
 
 def _safe(score: float) -> float:
     """Always return strictly between 0 and 1 (exclusive)."""
-    v = float(score)
-    if v != v:  # NaN
+    try:
+        v = float(score)
+    except Exception:
         return 0.05
+    if v != v:  # NaN check
+        return 0.05
+    # Clamp strictly between 0.001 and 0.990
     v = max(0.001, min(0.990, v))
     return round(v, 4)
 
 
 def _vital_score(value: float, lo: float, hi: float) -> float:
+    """Score a vital sign — never returns 0.0 or 1.0."""
+    try:
+        value = float(value)
+    except Exception:
+        return 0.05
     if lo <= value <= hi:
-        return 0.85
-    mid = (lo + hi) / 2
-    span = (hi - lo) / 2 + 1e-9
-    raw = 1.0 - abs(value - mid) / (span * 3)
+        return 0.88
+    mid = (lo + hi) / 2.0
+    span = max((hi - lo) / 2.0, 1e-6)
+    raw = 1.0 - abs(value - mid) / (span * 3.0)
     return _safe(raw)
 
 
@@ -38,7 +46,7 @@ def grade_task1(episode_log: list) -> GradeResult:
             break
 
     if first_normal_step and bp_score >= 0.7:
-        efficiency_bonus = max(0.0, (10 - first_normal_step) / 10) * 0.15
+        efficiency_bonus = max(0.0, (10 - first_normal_step) / 10.0) * 0.15
     else:
         efficiency_bonus = 0.0
 
@@ -48,7 +56,7 @@ def grade_task1(episode_log: list) -> GradeResult:
         score=_safe(score),
         details={
             "final_systolic_bp": sbp,
-            "bp_normal": 90 <= sbp <= 120,
+            "bp_normal": bool(90 <= sbp <= 120),
             "bp_score": round(bp_score, 4),
             "efficiency_bonus": round(efficiency_bonus, 4),
             "first_normal_step": first_normal_step,
@@ -79,7 +87,7 @@ def grade_task2(episode_log: list) -> GradeResult:
     bg_score   = _vital_score(bg,   70, 140)
 
     weighted   = hr_score * 0.3 + spo2_score * 0.4 + bg_score * 0.3
-    all_normal = hr_score >= 0.6 and spo2_score >= 0.7 and bg_score >= 0.7
+    all_normal = (hr_score >= 0.6 and spo2_score >= 0.7 and bg_score >= 0.7)
     bonus      = 0.06 if all_normal else 0.0
     score      = weighted + bonus + 0.02
 
@@ -92,9 +100,13 @@ def grade_task2(episode_log: list) -> GradeResult:
                 "spo2":          round(spo2_score, 4),
                 "blood_glucose": round(bg_score,   4),
             },
-            "all_vitals_normal": all_normal,
+            "all_vitals_normal": bool(all_normal),
             "bonus": bonus,
-            "final_vitals": {"heart_rate": hr, "spo2": spo2, "blood_glucose": bg},
+            "final_vitals": {
+                "heart_rate": hr,
+                "spo2": spo2,
+                "blood_glucose": bg,
+            },
         },
     )
 
@@ -103,29 +115,35 @@ def grade_task3(episode_log: list) -> GradeResult:
     if not episode_log:
         return GradeResult(task_id=3, score=0.05, details={"error": "empty log"})
 
-    survivals      = [_safe(float(s.get("survival_probability", 0.5)) or 0.05) for s in episode_log]
-    final_survival = min(0.95, survivals[-1])
-    avg_survival   = min(0.95, sum(survivals) / len(survivals))
+    survivals = []
+    for s in episode_log:
+        sv = s.get("survival_probability", 0.5)
+        survivals.append(_safe(float(sv) if sv else 0.05))
+
+    final_survival = min(0.95, max(0.05, survivals[-1]))
+    avg_survival   = min(0.95, max(0.05, sum(survivals) / max(len(survivals), 1)))
 
     fv = episode_log[-1].get("vitals", {})
     normal_ranges = {
-        "heart_rate":       (60,  100),
-        "systolic_bp":      (90,  120),
-        "spo2":             (95,  100),
+        "heart_rate":       (60,   100),
+        "systolic_bp":      (90,   120),
+        "spo2":             (95,   100),
         "temperature":      (36.5, 37.5),
-        "blood_glucose":    (70,  140),
-        "respiratory_rate": (12,   20),
-        "creatinine":       (0.6,  1.2),
+        "blood_glucose":    (70,   140),
+        "respiratory_rate": (12,    20),
+        "creatinine":       (0.6,   1.2),
     }
     normal_count = sum(
         1 for key, (lo, hi) in normal_ranges.items()
         if lo <= float(fv.get(key, 0)) <= hi
     )
-    vitals_ratio = normal_count / len(normal_ranges)
+    # Never let vitals_ratio be exactly 0.0
+    vitals_ratio = max(0.001, normal_count / len(normal_ranges))
 
     actions        = [s.get("action", "") for s in episode_log if s.get("action")]
     unique_actions = len(set(actions))
-    diversity      = min(0.88, unique_actions / 6)
+    # Never let diversity be exactly 0.0
+    diversity      = max(0.001, min(0.88, unique_actions / 6.0))
 
     score = (
         0.40 * final_survival
@@ -153,5 +171,6 @@ def grade(task_id: int, episode_log: list) -> GradeResult:
     if task_id not in graders:
         raise ValueError(f"Unknown task_id {task_id}. Valid: {list(graders.keys())}")
     result = graders[task_id](episode_log)
+    # Final safety net — absolutely cannot be 0.0 or 1.0
     result.score = _safe(result.score)
     return result
