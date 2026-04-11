@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import Optional, List
 from enum import Enum
 
@@ -41,6 +41,10 @@ class PatientState(BaseModel):
     done: bool = False
     info: dict = {}
 
+    @validator("survival_probability")
+    def clamp_survival(cls, v):
+        return round(max(0.001, min(0.999, float(v))), 4)
+
 
 class TreatmentAction(BaseModel):
     action: str
@@ -54,6 +58,10 @@ class StepResult(BaseModel):
     done: bool
     info: dict
 
+    @validator("reward")
+    def clamp_reward(cls, v):
+        return round(max(0.001, min(0.999, float(v))), 4)
+
 
 class GradeRequest(BaseModel):
     task_id: int
@@ -64,3 +72,7 @@ class GradeResult(BaseModel):
     task_id: int
     score: float
     details: dict
+
+    @validator("score")
+    def clamp_score(cls, v):
+        return round(max(0.001, min(0.999, float(v))), 4)
