@@ -3,18 +3,17 @@ from environment import NORMAL
 
 
 def _safe(score: float) -> float:
-    """Always return strictly between 0 and 1."""
+    """Always return strictly between 0 and 1 (exclusive)."""
     v = float(score)
-    if v <= 0.0 or v != v:  # handle 0, negative, NaN
-        return 0.0015
-    if v >= 1.0:
-        return 0.95
+    if v != v:  # NaN
+        return 0.05
+    v = max(0.001, min(0.990, v))
     return round(v, 4)
 
 
 def _vital_score(value: float, lo: float, hi: float) -> float:
     if lo <= value <= hi:
-        return 0.90
+        return 0.85
     mid = (lo + hi) / 2
     span = (hi - lo) / 2 + 1e-9
     raw = 1.0 - abs(value - mid) / (span * 3)
@@ -69,11 +68,11 @@ def grade_task2(episode_log: list) -> GradeResult:
     spo2 = float(vitals.get("spo2",           80))
     bg   = float(vitals.get("blood_glucose", 200))
 
-    if hr <= 100:   hr_score = 0.90
-    elif hr <= 120: hr_score = 0.70
-    elif hr <= 140: hr_score = 0.50
-    elif hr <= 160: hr_score = 0.30
-    elif hr <= 180: hr_score = 0.15
+    if hr <= 100:   hr_score = 0.85
+    elif hr <= 120: hr_score = 0.65
+    elif hr <= 140: hr_score = 0.45
+    elif hr <= 160: hr_score = 0.25
+    elif hr <= 180: hr_score = 0.12
     else:           hr_score = 0.05
 
     spo2_score = _vital_score(spo2, 95, 100)
@@ -81,7 +80,7 @@ def grade_task2(episode_log: list) -> GradeResult:
 
     weighted   = hr_score * 0.3 + spo2_score * 0.4 + bg_score * 0.3
     all_normal = hr_score >= 0.6 and spo2_score >= 0.7 and bg_score >= 0.7
-    bonus      = 0.07 if all_normal else 0.0
+    bonus      = 0.06 if all_normal else 0.0
     score      = weighted + bonus + 0.02
 
     return GradeResult(
@@ -126,7 +125,7 @@ def grade_task3(episode_log: list) -> GradeResult:
 
     actions        = [s.get("action", "") for s in episode_log if s.get("action")]
     unique_actions = len(set(actions))
-    diversity      = min(0.90, unique_actions / 6)
+    diversity      = min(0.88, unique_actions / 6)
 
     score = (
         0.40 * final_survival
@@ -154,6 +153,5 @@ def grade(task_id: int, episode_log: list) -> GradeResult:
     if task_id not in graders:
         raise ValueError(f"Unknown task_id {task_id}. Valid: {list(graders.keys())}")
     result = graders[task_id](episode_log)
-    result.score = _safe(result.score)  # final safety net
+    result.score = _safe(result.score)
     return result
-
