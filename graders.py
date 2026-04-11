@@ -156,3 +156,4 @@ def grade(task_id: int, episode_log: list) -> GradeResult:
     result = graders[task_id](episode_log)
     result.score = _safe(result.score)  # final safety net
     return result
+
