@@ -4,12 +4,7 @@ from environment import NORMAL
 
 def _clamp(score: float) -> float:
     """Score must be strictly between 0 and 1 — never 0.0 or 1.0."""
-    s = float(score)
-    if s <= 0.0:
-        return 0.01
-    if s >= 1.0:
-        return 0.99
-    return round(s, 4)
+    return float(max(0.01, min(0.99, round(float(score), 4))))
 
 
 def _vital_score(value: float, lo: float, hi: float) -> float:
