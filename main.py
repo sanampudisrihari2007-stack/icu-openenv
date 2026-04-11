@@ -8,7 +8,7 @@ import uvicorn
 
 app = FastAPI(
     title="ICU Treatment Optimizer — OpenEnv",
-    description="RL environment for ICU patient treatment optimization. An AI agent learns to recommend treatments to maximize patient survival.",
+    description="RL environment for ICU patient treatment optimization.",
     version="1.0.0",
 )
 
@@ -19,14 +19,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# One environment instance per task (task_id 1, 2, 3)
 _envs: dict[int, ICUEnvironment] = {
     1: ICUEnvironment(task_id=1),
     2: ICUEnvironment(task_id=2),
     3: ICUEnvironment(task_id=3),
 }
 
-# Episode log per task (for grading)
 _episode_logs: dict[int, list] = {1: [], 2: [], 3: []}
 
 
@@ -36,9 +34,11 @@ def _get_env(task_id: int) -> ICUEnvironment:
     return _envs[task_id]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Health check
-# ─────────────────────────────────────────────────────────────────────────────
+def _safe_score(score: float) -> float:
+    """Ensure score is strictly between 0 and 1."""
+    return round(max(0.01, min(0.99, float(score))), 4)
+
+
 @app.get("/")
 def root():
     return {
@@ -54,36 +54,25 @@ def health():
     return {"status": "healthy"}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# OpenEnv required endpoints
-# ─────────────────────────────────────────────────────────────────────────────
 @app.post("/reset", response_model=PatientState)
 def reset(task_id: int = 1):
-    """
-    Start a fresh patient episode.
-    - task_id=1 : Blood Pressure Stabilisation (easy, 10 steps)
-    - task_id=2 : Multi-Vital Balancing (medium, 20 steps)
-    - task_id=3 : Full ICU Episode / Sepsis (hard, 24 steps)
-    """
     env = _get_env(task_id)
     state = env.reset()
-    _episode_logs[task_id] = []   # clear log
+    _episode_logs[task_id] = []
     return state
 
 
 @app.post("/step", response_model=StepResult)
 def step(action: TreatmentAction, task_id: int = 1):
-    """
-    Take a treatment action and receive new patient state + reward.
-    action.action must be one of the valid actions listed in /tasks.
-    """
     env = _get_env(task_id)
     try:
         new_state, reward, done, info = env.step(action.action, action.dose)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Append to episode log for later grading
+    # Clamp reward
+    reward = _safe_score(reward)
+
     log_entry = {
         "step": new_state.step,
         "action": action.action,
@@ -99,7 +88,6 @@ def step(action: TreatmentAction, task_id: int = 1):
 
 @app.get("/state", response_model=PatientState)
 def state(task_id: int = 1):
-    """Return the current patient state without taking any action."""
     env = _get_env(task_id)
     try:
         return env.get_state()
@@ -107,12 +95,8 @@ def state(task_id: int = 1):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Task metadata
-# ─────────────────────────────────────────────────────────────────────────────
 @app.get("/tasks")
 def list_tasks():
-    """Return all available tasks with descriptions and valid actions."""
     return {
         "tasks": [
             {
@@ -120,9 +104,10 @@ def list_tasks():
                 "name": "Blood Pressure Stabilisation",
                 "difficulty": "easy",
                 "max_steps": 10,
-                "description": "Bring systolic BP into 90–120 mmHg range within 10 steps.",
+                "description": "Bring systolic BP into 90-120 mmHg range within 10 steps.",
                 "target_vital": "systolic_bp",
                 "scoring": "BP normal score + efficiency bonus",
+                "reward_range": [0.01, 0.99],
             },
             {
                 "task_id": 2,
@@ -132,6 +117,7 @@ def list_tasks():
                 "description": "Normalise heart_rate, spo2, and blood_glucose simultaneously.",
                 "target_vitals": ["heart_rate", "spo2", "blood_glucose"],
                 "scoring": "Weighted average of 3 vital scores + all-normal bonus",
+                "reward_range": [0.01, 0.99],
             },
             {
                 "task_id": 3,
@@ -140,41 +126,37 @@ def list_tasks():
                 "max_steps": 24,
                 "description": "Maximise patient survival probability over a 24-step episode.",
                 "scoring": "Composite: final survival (40%), avg survival (30%), vitals (20%), diversity (10%)",
+                "reward_range": [0.01, 0.99],
             },
         ],
         "valid_actions": VALID_ACTIONS,
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Grading
-# ─────────────────────────────────────────────────────────────────────────────
 @app.post("/grade", response_model=GradeResult)
 def grade_episode(request: GradeRequest):
-    """
-    Grade a completed episode.
-    Pass the episode_log from your inference script,
-    or leave it empty [] to grade the last recorded episode.
-    """
     log = request.episode_log if request.episode_log else _episode_logs.get(request.task_id, [])
     try:
-        return grade(request.task_id, log)
+        result = grade(request.task_id, log)
+        # Ensure score is strictly between 0 and 1
+        result.score = _safe_score(result.score)
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/grade/last/{task_id}", response_model=GradeResult)
 def grade_last_episode(task_id: int):
-    """Grade the most recently completed episode for the given task."""
     log = _episode_logs.get(task_id, [])
     if not log:
         raise HTTPException(status_code=404, detail="No episode log found. Run an episode first.")
     try:
-        return grade(task_id, log)
+        result = grade(task_id, log)
+        result.score = _safe_score(result.score)
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=7860, reload=False)

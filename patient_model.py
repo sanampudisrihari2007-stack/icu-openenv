@@ -36,7 +36,7 @@ class PatientState(BaseModel):
     vitals: PatientVitals
     diagnosis: Diagnosis
     severity: Severity
-    survival_probability: float = Field(..., ge=0.0, le=1.0)
+    survival_probability: float = Field(..., ge=0.01, le=0.99)
     treatment_history: List[str] = []
     done: bool = False
     info: dict = {}
@@ -50,7 +50,7 @@ class TreatmentAction(BaseModel):
 
 class StepResult(BaseModel):
     state: PatientState
-    reward: float = Field(..., ge=0.0, le=1.0)
+    reward: float = Field(..., ge=0.01, le=0.99)
     done: bool
     info: dict
 
@@ -62,5 +62,5 @@ class GradeRequest(BaseModel):
 
 class GradeResult(BaseModel):
     task_id: int
-    score: float = Field(..., ge=0.0, le=1.0)
+    score: float = Field(..., ge=0.01, le=0.99)
     details: dict

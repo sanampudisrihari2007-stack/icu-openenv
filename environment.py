@@ -221,7 +221,7 @@ class ICUEnvironment:
         if action == "increase_oxygen" and vitals.spo2 > 99:
             reward -= 0.10
 
-        return float(_clamp(reward, 0.0, 1.0))
+        return float(max(0.01, min(0.99, _clamp(reward, 0.0, 1.0))))
 
     def get_state(self) -> PatientState:
         if self.state is None:
