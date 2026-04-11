@@ -7,7 +7,7 @@ import time
 import requests
 from openai import OpenAI
 
-# Environment variables with defaults where required
+# Environment variables
 API_BASE_URL = os.getenv("API_BASE_URL", "https://api.groq.com/openai/v1")
 MODEL_NAME   = os.getenv("MODEL_NAME",   "llama-3.1-8b-instant")
 HF_TOKEN     = os.getenv("HF_TOKEN")
@@ -23,64 +23,95 @@ client = OpenAI(
 )
 
 TASKS = [1, 2, 3]
-TASK_NAMES = {1: "bp-stabilisation", 2: "multi-vital-balancing", 3: "icu-sepsis-management"}
+TASK_NAMES = {
+    1: "bp-stabilisation",
+    2: "multi-vital-balancing",
+    3: "icu-sepsis-management"
+}
+
+SYSTEM_PROMPT = """You are an expert ICU physician AI.
+Choose ONE treatment action based on patient vitals.
+
+Valid actions:
+- increase_vasopressor: raises blood pressure
+- decrease_vasopressor: lowers blood pressure
+- give_antibiotics: reduces heart rate and fever
+- increase_insulin: lowers blood glucose
+- decrease_insulin: raises blood glucose
+- give_iv_fluids: raises blood pressure
+- increase_oxygen: raises SpO2
+- decrease_oxygen: lowers SpO2
+- increase_peep: improves breathing
+- decrease_peep: reduces lung pressure
+- order_labs: observation only
+- call_specialist: small survival boost
+- do_nothing: no action
+
+Normal ranges:
+  heart_rate: 60-100 bpm
+  systolic_bp: 90-120 mmHg
+  spo2: 95-100%
+  blood_glucose: 70-140 mg/dL
+  respiratory_rate: 12-20/min
+
+Rules:
+1. systolic_bp < 90 -> increase_vasopressor
+2. spo2 < 95 -> increase_oxygen
+3. heart_rate > 120 -> give_antibiotics
+4. blood_glucose > 140 -> increase_insulin
+5. blood_glucose < 70 -> decrease_insulin
+6. all normal -> do_nothing
+
+Respond with ONLY the action name, nothing else.
+Example: increase_oxygen
+"""
+
+VALID_ACTIONS = [
+    "increase_vasopressor", "decrease_vasopressor", "give_antibiotics",
+    "increase_insulin", "decrease_insulin", "give_iv_fluids",
+    "increase_oxygen", "decrease_oxygen", "increase_peep", "decrease_peep",
+    "order_labs", "call_specialist", "do_nothing"
+]
 
 
-def rule_based_action(state: dict, task_id: int) -> str:
-    vitals  = state.get("vitals", {})
-    history = state.get("treatment_history", [])
+def choose_action(state: dict) -> str:
+    """Use LLM to choose action."""
+    vitals = state.get("vitals", {})
+    prompt = f"""Patient vitals:
+  Heart Rate: {vitals.get('heart_rate', 0):.1f} bpm
+  Systolic BP: {vitals.get('systolic_bp', 0):.1f} mmHg
+  SpO2: {vitals.get('spo2', 0):.1f}%
+  Temperature: {vitals.get('temperature', 0):.1f}C
+  Blood Glucose: {vitals.get('blood_glucose', 0):.1f} mg/dL
+  Respiratory Rate: {vitals.get('respiratory_rate', 0):.1f}/min
 
-    sbp  = vitals.get("systolic_bp", 100)
-    spo2 = vitals.get("spo2", 95)
-    hr   = vitals.get("heart_rate", 80)
-    bg   = vitals.get("blood_glucose", 100)
-    rr   = vitals.get("respiratory_rate", 15)
+Diagnosis: {state.get('diagnosis', '?')}
+Severity: {state.get('severity', '?')}
+Step: {state.get('step', 0)}/{state.get('max_steps', '?')}
+Survival: {state.get('survival_probability', 0):.2f}
 
-    antibiotic_count  = history.count("give_antibiotics")
-    insulin_count     = history.count("increase_insulin")
-    oxygen_count      = history.count("increase_oxygen")
-    vasopressor_count = history.count("increase_vasopressor")
+Choose the best action:"""
 
-    if task_id == 1:
-        if sbp < 100 and vasopressor_count < 4:
-            return "increase_vasopressor"
+    try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            max_tokens=20,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        action = response.choices[0].message.content.strip().lower()
+        action = action.replace(".", "").replace(",", "").strip()
+        if action in VALID_ACTIONS:
+            return action
+        # Try to find valid action in response
+        for valid in VALID_ACTIONS:
+            if valid in action:
+                return valid
         return "do_nothing"
-
-    elif task_id == 2:
-        if sbp < 90:
-            return "increase_vasopressor"
-        if bg < 75:
-            return "decrease_insulin"
-        if hr > 100 and antibiotic_count < 9:
-            return "give_antibiotics"
-        if spo2 < 95 and oxygen_count < 6:
-            return "increase_oxygen"
-        if bg > 140 and insulin_count < 5:
-            return "increase_insulin"
+    except Exception as e:
         return "do_nothing"
-
-    elif task_id == 3:
-        if sbp < 90 and vasopressor_count < 3:
-            return "increase_vasopressor"
-        if sbp < 100 and history.count("give_iv_fluids") < 2:
-            return "give_iv_fluids"
-        if spo2 < 95 and oxygen_count < 8:
-            return "increase_oxygen"
-        if rr > 20 and history.count("increase_peep") < 2:
-            return "increase_peep"
-        if hr > 100 and antibiotic_count < 6:
-            return "give_antibiotics"
-        if bg > 140 and insulin_count < 5:
-            return "increase_insulin"
-        if bg < 75:
-            return "decrease_insulin"
-        if history.count("call_specialist") < 1:
-            return "call_specialist"
-        if history.count("order_labs") < 1:
-            return "order_labs"
-        return "do_nothing"
-
-    return "do_nothing"
 
 
 def run_episode(task_id: int) -> dict:
@@ -100,12 +131,10 @@ def run_episode(task_id: int) -> dict:
         return {"task_id": task_id, "score": 0.0, "steps": 0}
 
     rewards = []
-    done = False
-    step = 0
     last_error = None
 
     while not state.get("done", False):
-        action = rule_based_action(state, task_id)
+        action = choose_action(state)
 
         try:
             result = requests.post(
@@ -117,7 +146,7 @@ def run_episode(task_id: int) -> dict:
             last_error = None
         except Exception as e:
             last_error = str(e)
-            print(f"[STEP] step={step+1} action={action} reward=0.00 done=false error={last_error}", flush=True)
+            print(f"[STEP] step={len(rewards)+1} action={action} reward=0.00 done=false error={last_error}", flush=True)
             break
 
         if "state" not in result:
@@ -144,10 +173,9 @@ def run_episode(task_id: int) -> dict:
 
     # Grade episode
     try:
-        episode_log = []
         grade_result = requests.post(
             f"{ENV_URL}/grade",
-            json={"task_id": task_id, "episode_log": episode_log},
+            json={"task_id": task_id, "episode_log": []},
             timeout=60,
         ).json()
         final_score = grade_result.get("score", 0.0)
