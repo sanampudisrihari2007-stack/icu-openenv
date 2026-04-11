@@ -3,7 +3,6 @@ import numpy as np
 from patient_model import PatientVitals, PatientState, Diagnosis, Severity
 
 
-# ── Normal ranges ──────────────────────────────────────────────────────────────
 NORMAL = {
     "heart_rate":       (60,   100),
     "systolic_bp":      (90,   120),
@@ -15,7 +14,6 @@ NORMAL = {
     "creatinine":       (0.6,   1.2),
 }
 
-# ── Action definitions: each action nudges specific vitals ─────────────────────
 ACTION_EFFECTS = {
     "increase_vasopressor": {"systolic_bp": +12, "diastolic_bp": +6,  "heart_rate": +5},
     "decrease_vasopressor": {"systolic_bp": -12, "diastolic_bp": -6,  "heart_rate": -5},
@@ -27,8 +25,8 @@ ACTION_EFFECTS = {
     "decrease_oxygen":      {"spo2": -3,  "respiratory_rate": +2},
     "increase_peep":        {"spo2": +4,  "systolic_bp": -5},
     "decrease_peep":        {"spo2": -4,  "systolic_bp": +5},
-    "order_labs":           {},   # observation action — no direct effect
-    "call_specialist":      {"survival_probability": +0.03},
+    "order_labs":           {},
+    "call_specialist":      {},
     "do_nothing":           {},
 }
 
@@ -39,8 +37,12 @@ def _clamp(value, lo, hi):
     return max(lo, min(hi, value))
 
 
+def _safe(value):
+    """Ensure value is strictly between 0 and 1."""
+    return round(max(0.01, min(0.99, float(value))), 4)
+
+
 def _random_vitals(diagnosis: Diagnosis, severity: Severity) -> PatientVitals:
-    """Generate abnormal starting vitals based on diagnosis & severity."""
     severity_multiplier = {"mild": 0.5, "moderate": 1.0, "severe": 1.5, "critical": 2.0}[severity]
 
     base = {
@@ -64,7 +66,6 @@ def _random_vitals(diagnosis: Diagnosis, severity: Severity) -> PatientVitals:
         base["blood_glucose"] = random.uniform(180, 300)
         base["temperature"] = random.uniform(37.8, 38.5)
 
-    # Clamp to plausible physiological limits
     return PatientVitals(
         heart_rate=       _clamp(base["heart_rate"],       20,  200),
         systolic_bp=      _clamp(base["systolic_bp"],      40,  200),
@@ -78,7 +79,6 @@ def _random_vitals(diagnosis: Diagnosis, severity: Severity) -> PatientVitals:
 
 
 def _survival_probability(vitals: PatientVitals) -> float:
-    """Estimate survival probability from current vitals (0.0–1.0)."""
     score = 1.0
 
     def penalty(value, lo, hi, weight):
@@ -96,11 +96,11 @@ def _survival_probability(vitals: PatientVitals) -> float:
     score -= penalty(vitals.respiratory_rate,  12,   20, 0.10)
     score -= penalty(vitals.creatinine,         0.6,  1.2, 0.15)
 
-    return _clamp(score, 0.0, 1.0)
+    # Always return strictly between 0.01 and 0.99
+    return _safe(score)
 
 
 def _add_noise(vitals: PatientVitals) -> PatientVitals:
-    """Add small physiological noise each step."""
     return PatientVitals(
         heart_rate=       _clamp(vitals.heart_rate       + random.gauss(0, 1.5),  20,  200),
         systolic_bp=      _clamp(vitals.systolic_bp      + random.gauss(0, 1.5),  40,  200),
@@ -121,9 +121,9 @@ class ICUEnvironment:
 
     def _configure_task(self):
         configs = {
-            1: {"max_steps": 10, "diagnosis": Diagnosis.SEPSIS,            "severity": Severity.MODERATE},
-            2: {"max_steps": 20, "diagnosis": Diagnosis.POST_SURGERY,       "severity": Severity.SEVERE},
-            3: {"max_steps": 24, "diagnosis": Diagnosis.RESPIRATORY_FAILURE,"severity": Severity.CRITICAL},
+            1: {"max_steps": 10, "diagnosis": Diagnosis.SEPSIS,             "severity": Severity.MODERATE},
+            2: {"max_steps": 20, "diagnosis": Diagnosis.POST_SURGERY,        "severity": Severity.SEVERE},
+            3: {"max_steps": 24, "diagnosis": Diagnosis.RESPIRATORY_FAILURE, "severity": Severity.CRITICAL},
         }
         self.config = configs.get(self.task_id, configs[1])
 
@@ -158,27 +158,21 @@ class ICUEnvironment:
         effects = ACTION_EFFECTS[action]
         v = self.state.vitals.dict()
 
-        # Apply action effects
         for key, delta in effects.items():
             if key in v:
-                lo, hi = (0.0, 1.0) if key == "survival_probability" else (
-                    NORMAL[key][0] * 0.3, NORMAL[key][1] * 2.5
-                )
+                lo, hi = NORMAL[key][0] * 0.3, NORMAL[key][1] * 2.5
                 v[key] = _clamp(v[key] + delta, lo, hi)
 
-        # Apply noise
-        new_vitals = _add_noise(PatientVitals(**v))
+        new_vitals  = _add_noise(PatientVitals(**v))
         new_survival = _survival_probability(new_vitals)
 
-        # Adjust survival_probability from call_specialist
         if action == "call_specialist":
-            new_survival = _clamp(new_survival + 0.03, 0.0, 1.0)
+            new_survival = _safe(new_survival + 0.03)
 
-        # Calculate reward
         reward = self._calculate_reward(prev_survival, new_survival, new_vitals, action)
 
         self.state.step += 1
-        done = (self.state.step >= self.state.max_steps) or (new_survival < 0.05)
+        done = (self.state.step >= self.state.max_steps) or (new_survival <= 0.05)
 
         self.state = PatientState(
             patient_id=self.state.patient_id,
@@ -198,30 +192,26 @@ class ICUEnvironment:
     def _calculate_reward(self, prev_survival, new_survival, vitals, action) -> float:
         reward = 0.0
 
-        # Survival improvement
         delta = new_survival - prev_survival
         if delta > 0:
             reward += 0.4 * (delta / 0.1)
         else:
             reward += 0.2 * (delta / 0.1)
 
-        # Vitals in normal range bonus
         normal_count = sum(
             1 for key, (lo, hi) in NORMAL.items()
             if lo <= getattr(vitals, key, lo) <= hi
         )
         reward += 0.3 * (normal_count / len(NORMAL))
-
-        # Absolute survival bonus
         reward += 0.3 * new_survival
 
-        # Penalise contradictory / harmful combos
         if action in ("increase_vasopressor", "decrease_vasopressor") and vitals.heart_rate > 150:
             reward -= 0.15
         if action == "increase_oxygen" and vitals.spo2 > 99:
             reward -= 0.10
 
-        return float(max(0.01, min(0.99, _clamp(reward, 0.0, 1.0))))
+        # Always strictly between 0.01 and 0.99
+        return _safe(reward)
 
     def get_state(self) -> PatientState:
         if self.state is None:
