@@ -82,7 +82,7 @@ Choose action:"""
             ],
         )
         action = response.choices[0].message.content.strip().lower()
-        action = action.replace(".", "").replace(",", "").strip()
+        action = action.replace(".", "").replace(",", "").replace("\n", " ").replace("\r", " ").strip()
         if action in VALID_ACTIONS:
             return action
         for valid in VALID_ACTIONS:
@@ -124,7 +124,7 @@ def run_episode(task_id: int) -> dict:
             ).json()
             last_error = None
         except Exception as e:
-            last_error = str(e)
+            last_error = str(e).replace('\n', ' ').replace('\r', '')
             print(f"[STEP] step={len(rewards)+1} action={action} reward=0.00 done=false error={last_error}", flush=True)
             break
 
@@ -183,15 +183,9 @@ def run_episode(task_id: int) -> dict:
 
 
 def main():
-    results = []
     for task_id in TASKS:
-        result = run_episode(task_id)
-        results.append(result)
+        run_episode(task_id)
         time.sleep(1)
-
-    print("\n=== FINAL SCORES ===", flush=True)
-    for r in results:
-        print(f"Task {r['task_id']}: {r['score']:.4f}  ({r['steps']} steps)", flush=True)
 
 
 if __name__ == "__main__":
