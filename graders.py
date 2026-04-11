@@ -2,15 +2,19 @@ from patient_model import PatientState, GradeResult
 from environment import NORMAL
 
 
+def _clamp_score(score: float) -> float:
+    """Clamp score to strictly between 0 and 1 (exclusive)."""
+    return round(max(0.01, min(0.99, score)), 4)
+
 def _vital_score(vitals, key: str) -> float:
-    """Return how close a vital is to its normal range (0.0–1.0)."""
+    """Return how close a vital is to its normal range (0.01–0.99)."""
     lo, hi = NORMAL[key]
     value = getattr(vitals, key)
     if lo <= value <= hi:
-        return 1.0
+        return 0.99
     mid = (lo + hi) / 2
     span = (hi - lo) / 2 + 1e-9
-    return max(0.0, 1.0 - abs(value - mid) / (span * 3))
+    return max(0.01, min(0.99, 1.0 - abs(value - mid) / (span * 3)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -22,7 +26,7 @@ def grade_task1(episode_log: list) -> GradeResult:
     Score = BP normal score at final step, boosted for achieving it early.
     """
     if not episode_log:
-        return GradeResult(task_id=1, score=0.0, details={"error": "empty log"})
+        return GradeResult(task_id=1, score=0.01, details={"error": "empty log"})
 
     final = episode_log[-1]
     vitals = final.get("vitals", {})
@@ -51,7 +55,7 @@ def grade_task1(episode_log: list) -> GradeResult:
 
     return GradeResult(
         task_id=1,
-        score=round(score, 4),
+        score=_clamp_score(score),
         details={
             "final_systolic_bp": sbp,
             "bp_normal": 90 <= sbp <= 120,
@@ -72,7 +76,7 @@ def grade_task2(episode_log: list) -> GradeResult:
     Score = weighted average of the three vital scores at episode end.
     """
     if not episode_log:
-        return GradeResult(task_id=2, score=0.0, details={"error": "empty log"})
+        return GradeResult(task_id=2, score=0.01, details={"error": "empty log"})
 
     final = episode_log[-1]
     vitals = final.get("vitals", {})
@@ -120,7 +124,7 @@ def grade_task2(episode_log: list) -> GradeResult:
 
     return GradeResult(
         task_id=2,
-        score=round(score, 4),
+        score=_clamp_score(score),
         details={
             "vital_scores": {k: round(v, 4) for k, v in scores.items()},
             "all_vitals_normal": all_normal,
@@ -143,7 +147,7 @@ def grade_task3(episode_log: list) -> GradeResult:
       - Treatment diversity / efficiency    (10 %)
     """
     if not episode_log:
-        return GradeResult(task_id=3, score=0.0, details={"error": "empty log"})
+        return GradeResult(task_id=3, score=0.01, details={"error": "empty log"})
 
     survivals = [step.get("survival_probability", 0.0) for step in episode_log]
     final_survival = survivals[-1]
@@ -175,7 +179,7 @@ def grade_task3(episode_log: list) -> GradeResult:
 
     return GradeResult(
         task_id=3,
-        score=round(min(1.0, score), 4),
+        score=_clamp_score(score),
         details={
             "final_survival_probability": round(final_survival, 4),
             "average_survival":           round(avg_survival, 4),
