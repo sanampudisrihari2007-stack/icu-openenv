@@ -6,7 +6,7 @@ def _safe(score: float) -> float:
     """Always return strictly between 0 and 1."""
     v = float(score)
     if v <= 0.0 or v != v:  # handle 0, negative, NaN
-        return 0.05
+        return 0.0015
     if v >= 1.0:
         return 0.95
     return round(v, 4)
