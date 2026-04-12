@@ -30,18 +30,14 @@ VALID = [
 ]
 
 def safe(x):
-    """
-    Strictly between 0 and 1.
-    Minimum 0.05 so that f'{v:.2f}' never gives '0.00'.
-    Maximum 0.95 so that f'{v:.2f}' never gives '1.00'.
-    """
+    """Strictly between 0 and 1. Min 0.05, Max 0.95."""
     try:
         v = float(x)
         if v != v: return 0.50   # NaN
-        if v <= 0: return 0.05   # zero or negative -> 0.05 (prints as 0.05)
-        if v >= 1: return 0.95   # one or more -> 0.95 (prints as 0.95)
-        if v < 0.05: return 0.05 # too small -> would print as 0.00 or 0.01
-        if v > 0.95: return 0.95 # too large
+        if v <= 0: return 0.05
+        if v >= 1: return 0.95
+        if v < 0.05: return 0.05
+        if v > 0.95: return 0.95
         return round(v, 2)
     except:
         return 0.50
@@ -76,6 +72,8 @@ def choose_action(state):
 
 def run_episode(task_id):
     task_name = TASK_NAMES.get(task_id, f"task_{task_id}")
+
+    # [START]
     print(f"[START] task={task_name} env=icu-optimizer model={MODEL_NAME}", flush=True)
 
     try:
@@ -85,12 +83,13 @@ def run_episode(task_id):
             timeout=60
         ).json()
     except:
-        # Even on failure, print valid END line
-        print(f"[END] success=false steps=1 rewards=0.05", flush=True)
+        # Clamp score BEFORE printing [END]
+        final_score = max(0.01, min(0.99, 0.05))
+        print(f"[END] success=false steps=0 score={final_score:.2f} rewards=0.05", flush=True)
         return
 
-    rewards  = []
-    ep_log   = []
+    rewards = []
+    ep_log  = []
 
     while not state.get("done", False):
         action = choose_action(state)
@@ -102,29 +101,32 @@ def run_episode(task_id):
                 timeout=60,
             ).json()
         except:
-            rewards.append(0.05)
-            print(f"[STEP] step={len(rewards)} action={action} reward=0.05 done=false error=timeout", flush=True)
+            r = 0.05
+            rewards.append(r)
+            print(f"[STEP] step={len(rewards)} action={action} reward={r:.2f} done=false error=timeout", flush=True)
             break
 
         if "state" not in res:
             break
 
         new_state = res["state"]
-        reward    = safe(res.get("reward", 0.05))
-        done      = res.get("done", False)
-        step      = new_state["step"]
+
+        # Clamp reward immediately after getting from API
+        raw_reward = res.get("reward", 0.05)
+        reward = max(0.01, min(0.99, float(raw_reward) if raw_reward else 0.05))
+        reward = safe(reward)  # double safe
+
+        done  = res.get("done", False)
+        step  = new_state["step"]
         rewards.append(reward)
 
-        sp = new_state.get("survival_probability", 0.5)
-        sp = safe(sp)
+        sp = safe(new_state.get("survival_probability", 0.5))
 
         ep_log.append({
-            "step":   step,
-            "action": action,
+            "step": step, "action": action,
             "vitals": new_state.get("vitals", {}),
             "survival_probability": sp,
-            "reward": reward,
-            "done":   done,
+            "reward": reward, "done": done,
         })
 
         print(
@@ -137,30 +139,27 @@ def run_episode(task_id):
         state = new_state
         if done: break
 
-    # Grade
+    # Get grade score from API
     try:
         gr = requests.post(
             f"{ENV_URL}/grade",
             json={"task_id": task_id, "episode_log": ep_log},
             timeout=60,
         ).json()
-        score = safe(gr.get("score", 0.50))
+        raw_score = gr.get("score", 0.50)
     except:
-        score = 0.50
+        raw_score = 0.50
 
-    # Build rewards string - every value strictly between 0 and 1
-    safe_rewards = [safe(r) for r in rewards]
-    if not safe_rewards:
-        safe_rewards = [0.05]
+    # CLAMP SCORE BEFORE PRINTING - this is the critical fix
+    final_score = max(0.01, min(0.99, float(raw_score) if raw_score else 0.50))
+    final_score = safe(final_score)  # double safe
 
-    # Verify all rewards print correctly
-    rewards_str = ",".join([f"{r:.2f}" for r in safe_rewards])
+    # Build rewards string
+    safe_rewards = [safe(r) for r in rewards] if rewards else [0.05]
+    rewards_str  = ",".join([f"{r:.2f}" for r in safe_rewards])
 
-    # Double check no 0.00 or 1.00 in output
-    for r in safe_rewards:
-        assert f"{r:.2f}" not in ("0.00", "1.00"), f"Bad reward: {r}"
-
-    print(f"[END] success=true steps={len(safe_rewards)} rewards={rewards_str}", flush=True)
+    # [END] - score is clamped BEFORE printing
+    print(f"[END] success=true steps={len(safe_rewards)} score={final_score:.2f} rewards={rewards_str}", flush=True)
 
 def main():
     for task_id in TASKS:
