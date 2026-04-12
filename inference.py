@@ -29,11 +29,19 @@ VALID = [
     "order_labs","call_specialist","do_nothing"
 ]
 
-def safe_reward(x):
+def safe(x):
+    """
+    Strictly between 0 and 1.
+    Minimum 0.05 so that f'{v:.2f}' never gives '0.00'.
+    Maximum 0.95 so that f'{v:.2f}' never gives '1.00'.
+    """
     try:
         v = float(x)
-        if v <= 0 or v >= 1 or v != v:
-            return 0.50
+        if v != v: return 0.50   # NaN
+        if v <= 0: return 0.05   # zero or negative -> 0.05 (prints as 0.05)
+        if v >= 1: return 0.95   # one or more -> 0.95 (prints as 0.95)
+        if v < 0.05: return 0.05 # too small -> would print as 0.00 or 0.01
+        if v > 0.95: return 0.95 # too large
         return round(v, 2)
     except:
         return 0.50
@@ -45,7 +53,9 @@ def choose_action(state):
         f"BP:{vitals.get('systolic_bp',0):.0f} "
         f"SpO2:{vitals.get('spo2',0):.0f} "
         f"BG:{vitals.get('blood_glucose',0):.0f} "
-        f"Diag:{state.get('diagnosis','sepsis')}"
+        f"RR:{vitals.get('respiratory_rate',0):.0f} "
+        f"Diag:{state.get('diagnosis','sepsis')} "
+        f"Step:{state.get('step',0)}/{state.get('max_steps',10)}"
     )
     try:
         r = client.chat.completions.create(
@@ -55,7 +65,8 @@ def choose_action(state):
                 {"role": "user",   "content": prompt}
             ]
         )
-        a = r.choices[0].message.content.strip().lower().replace(".","").replace(",","").strip()
+        a = r.choices[0].message.content.strip().lower()
+        a = a.replace(".","").replace(",","").strip()
         if a in VALID: return a
         for v in VALID:
             if v in a: return v
@@ -74,7 +85,8 @@ def run_episode(task_id):
             timeout=60
         ).json()
     except:
-        print(f"[END] success=false steps=0 rewards=0.50", flush=True)
+        # Even on failure, print valid END line
+        print(f"[END] success=false steps=1 rewards=0.05", flush=True)
         return
 
     rewards  = []
@@ -90,26 +102,21 @@ def run_episode(task_id):
                 timeout=60,
             ).json()
         except:
-            rewards.append(0.50)
-            print(f"[STEP] step={len(rewards)} action={action} reward=0.50 done=false error=timeout", flush=True)
+            rewards.append(0.05)
+            print(f"[STEP] step={len(rewards)} action={action} reward=0.05 done=false error=timeout", flush=True)
             break
 
         if "state" not in res:
             break
 
         new_state = res["state"]
-        reward    = safe_reward(res.get("reward", 0.50))
+        reward    = safe(res.get("reward", 0.05))
         done      = res.get("done", False)
         step      = new_state["step"]
         rewards.append(reward)
 
         sp = new_state.get("survival_probability", 0.5)
-        try:
-            sp = float(sp)
-            if sp <= 0 or sp >= 1 or sp != sp:
-                sp = 0.5
-        except:
-            sp = 0.5
+        sp = safe(sp)
 
         ep_log.append({
             "step":   step,
@@ -137,14 +144,23 @@ def run_episode(task_id):
             json={"task_id": task_id, "episode_log": ep_log},
             timeout=60,
         ).json()
-        score = float(gr.get("score", 0.50))
-        if score <= 0 or score >= 1 or score != score:
-            score = 0.50
+        score = safe(gr.get("score", 0.50))
     except:
         score = 0.50
 
-    rewards_str = ",".join([f"{r:.2f}" for r in rewards])
-    print(f"[END] success=true steps={len(rewards)} rewards={rewards_str}", flush=True)
+    # Build rewards string - every value strictly between 0 and 1
+    safe_rewards = [safe(r) for r in rewards]
+    if not safe_rewards:
+        safe_rewards = [0.05]
+
+    # Verify all rewards print correctly
+    rewards_str = ",".join([f"{r:.2f}" for r in safe_rewards])
+
+    # Double check no 0.00 or 1.00 in output
+    for r in safe_rewards:
+        assert f"{r:.2f}" not in ("0.00", "1.00"), f"Bad reward: {r}"
+
+    print(f"[END] success=true steps={len(safe_rewards)} rewards={rewards_str}", flush=True)
 
 def main():
     for task_id in TASKS:

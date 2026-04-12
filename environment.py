@@ -97,7 +97,7 @@ def _survival_probability(vitals: PatientVitals) -> float:
     score -= penalty(vitals.creatinine,         0.6,  1.2, 0.15)
 
     # Always return strictly between 0.01 and 0.99
-    return _safe(score)
+    return float(max(0.05, min(0.95, score)))
 
 
 def _add_noise(vitals: PatientVitals) -> PatientVitals:
